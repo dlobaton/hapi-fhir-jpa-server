@@ -85,6 +85,7 @@ public class BaseJpaRestfulServer extends RestfulServer {
   DatabaseBackedPagingProvider databaseBackedPagingProvider;
   @Autowired
   IInterceptorService interceptorService;
+  Oauth2ServerInterceptor myintercp;
   @Autowired
   IValidatorModule validatorModule;
   @Autowired
@@ -409,6 +410,10 @@ public class BaseJpaRestfulServer extends RestfulServer {
 			packageInstallerSvc.install(packageInstallationSpec);
       }
     }
+    
+    // Add my Oauth2 interceptor
+    Oauth2ServerInterceptor intercpetorOAuth2 = new Oauth2ServerInterceptor(ctx.getResourceTypes());
+    this.registerInterceptor(intercpetorOAuth2);   
 
     if(factory != null) {
 		 interceptorService.registerInterceptor(factory.buildUsingStoredStructureDefinitions());
