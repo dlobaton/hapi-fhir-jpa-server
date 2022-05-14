@@ -6,7 +6,9 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
 import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Set;
@@ -37,7 +39,7 @@ import ca.uhn.fhir.rest.server.interceptor.InterceptorAdapter;
 
 public class Oauth2ServerInterceptor extends InterceptorAdapter {
 
-    private int myTimeSkewAllowance = 100;
+    private int myTimeSkewAllowance = 200;
 
     private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Oauth2ServerInterceptor.class);
     static final RestTemplate restTemplate = new RestTemplate();
@@ -92,11 +94,13 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
 
         token = token.substring(Constants.HEADER_AUTHORIZATION_VALPREFIX_BEARER.length());
 
-        SignedJWT idToken;
+        SignedJWT idToken; // retrieve introspect token
         JWTClaimsSet idClaims;
+        
         try {
             idToken = SignedJWT.parse(token);
-            idClaims = idToken.getJWTClaimsSet();
+            idClaims = idToken.getJWTClaimsSet(); // here we get introspect claims belonging to a specific user
+            logger.info("ID CLAIMS: " + idClaims.toString());
         } catch (ParseException e) {
             throw new AuthenticationException("Not authorized (bearer token could not be validated)", e);
         }
@@ -109,16 +113,18 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
         logger.info("Verification of signature CORRECT");
 
         // Check expiration token
-        Date expirationTime = idClaims.getExpirationTime();
+        Calendar expirationTime = Calendar.getInstance();
+        expirationTime.setTime(idClaims.getExpirationTime());
+        expirationTime.add(Calendar.HOUR_OF_DAY, 2); // the clock is 2h back in 
 
-        if (expirationTime == null) {
+        if (expirationTime.getTime() == null) {
             throw new AuthenticationException("Id Token does not have required expiration claim");
         } else {
             // it's not null, see if it's expired
             Date minAllowableExpirationTime = new Date(System.currentTimeMillis() + (myTimeSkewAllowance * 1000L));
-            logger.info(expirationTime.toString());
+            logger.info(expirationTime.getTime().toString());
             logger.info(minAllowableExpirationTime.toString());
-            if (!expirationTime.after(minAllowableExpirationTime)) {
+            if (!expirationTime.getTime().after(minAllowableExpirationTime)) {
                 throw new AuthenticationException("Id Token is expired: " + expirationTime.getTime());
             }
         }
@@ -152,35 +158,20 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
         } 
         String scopesFromToken [] = idClaims.getClaim("scope").toString().split(" ");
         
+        // If the access token belongs to admin, return true
+        if (Arrays.asList(scopesFromToken).contains("system")) return true;
+        logger.info("PASA");
         //For the scopes defined as patient/*.* we also need a claim patient from the AT where we find the id from the patient
         JSONArray tokenPatients = (JSONArray) idClaims.getClaim("patient"); 
         ArrayList<String> patientIds = new ArrayList<String>();
-        ArrayList<String> subParamsList = new ArrayList<String>();
-        boolean isFilteringByPatientandPatientClaim = false;
         if(tokenPatients != null) {
             //We load all the patients ids at the patient claim from the AT
             for (Object o : tokenPatients) {
                 patientIds.add((String) o);
             }
-          //Storing subject filter used at the request
-            if (theRequest.getParameterValues("subject")!=null) {
-                for (String param : theRequest.getParameterValues("subject")) {
-                    subParamsList.add(param);
-                }
-            }
-          //Storing patient filter used at the request
-            if (theRequest.getParameterValues("patient")!=null) {
-                for (String param : theRequest.getParameterValues("patient")) {
-                    subParamsList.add(param);
-                }
-            }
-            //Checking if the patient id at the AT matches filters applied to the request
-            if (patientIds.size()>0
-                && subParamsList.size()>0) {
-                isFilteringByPatientandPatientClaim = patientIds.containsAll(subParamsList);
-            }
         }
-
+        logger.info("     type:    " + theRequestDetails.getRequestType() + "     resource name:    " + theRequestDetails.getResourceName() + "   id:   " + theRequestDetails.getId());
+        
         for(String scopeFromToken: scopesFromToken) {
             if(hasValidFormat(scopeFromToken)) {
                 String id = scopeFromToken.substring(0, scopeFromToken.indexOf('/'));
@@ -197,30 +188,33 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
                             } else if (id.equals("patient")) {
                                 //When scope defined at patient limited level, and a patient resource is requestedd
                                 if (theRequestDetails.getResourceName().equals("Patient")) {
+                                	switch(theRequestDetails.getRequestType()) {
+	                                	case POST:
+	                                	case PUT:
+	                                	case DELETE:
+	                                		throw new AuthenticationException("Patient user is not allowed to do POST, PUT or DELETE operation.");
+	                                	default:
+	                                		break;
+                                	}
+                                	if(theRequestDetails.getRequestType().equals("POST") | theRequestDetails.getRequestType().equals("PUT")| theRequestDetails.getRequestType().equals("DELETE")) {
+                                		throw new AuthenticationException("A patient can not do POST, PUT or DELETE operation.");
+                                	}
                                     if (patientIds.size()>0) {
                                         if (theRequestDetails.getId() != null) {
+                                        	logger.info("patientIds: " + patientIds.toString());
+                                        	logger.info("therequestdetails id: " + theRequestDetails.getId().getValue());
                                             //Checking that the id request is defined at the patient claim from the AT
-                                            if (patientIds.contains(theRequestDetails.getId().getValue())) {
-                                                return true;
-                                            }
-                                        }    
-                                        //We can also allow general Patient requests filtering by ?_id
-                                        if (theRequest.getParameterValues("_id")!=null) {
-                                            subParamsList = new ArrayList<String>();
-                                            for (String idFromParam : theRequest.getParameterValues("_id")) {
-                                                subParamsList.add("Patient/" + idFromParam);
-                                            }
-                                            if (patientIds.containsAll(subParamsList)) {
-                                                return true;
+                                            for(int i = 0; i < patientIds.size(); i++) {
+                                            	if(patientIds.get(i).contains(theRequestDetails.getId().getValue())) {
+                                            		return true;
+                                            	}
                                             }
                                         }
+                                    } else {
+                                    	throw new AuthenticationException("Not authorized. Patient user does not have any resources access right now.");
                                     }
-                                } else {
-                                    if (isFilteringByPatientandPatientClaim) {
-                                        return true;
-                                    }  
                                 }
-                                logger.info("Introspection has validated that token is OK");
+                                throw new AuthenticationException("Not authorized. Insufficient scopes to reach this resource.");
                             }
                         }
                     }
