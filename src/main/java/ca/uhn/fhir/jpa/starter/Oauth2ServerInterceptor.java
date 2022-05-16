@@ -115,16 +115,14 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
         // Check expiration token
         Calendar expirationTime = Calendar.getInstance();
         expirationTime.setTime(idClaims.getExpirationTime());
-        expirationTime.add(Calendar.HOUR_OF_DAY, 2); // the clock is 2h back in 
 
         if (expirationTime.getTime() == null) {
             throw new AuthenticationException("Id Token does not have required expiration claim");
         } else {
             // it's not null, see if it's expired
-            Date minAllowableExpirationTime = new Date(System.currentTimeMillis() + (myTimeSkewAllowance * 1000L));
-            logger.info(expirationTime.getTime().toString());
-            logger.info(minAllowableExpirationTime.toString());
-            if (!expirationTime.getTime().after(minAllowableExpirationTime)) {
+        	Calendar nowCalendar = Calendar.getInstance();
+            logger.info(expirationTime.getTime().toString() + "  vs  " + nowCalendar.getTime().toString());
+            if (expirationTime.getTime().before(nowCalendar.getTime())) {
                 throw new AuthenticationException("Id Token is expired: " + expirationTime.getTime());
             }
         }
@@ -138,7 +136,7 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
             }
         }
 
-        logger.debug("Token has not expired");
+        logger.info("Token has not expired");
 
         // Check issued in the future
         Date issueTime = idClaims.getIssueTime();
@@ -195,9 +193,6 @@ public class Oauth2ServerInterceptor extends InterceptorAdapter {
 	                                		throw new AuthenticationException("Patient user is not allowed to do POST, PUT or DELETE operation.");
 	                                	default:
 	                                		break;
-                                	}
-                                	if(theRequestDetails.getRequestType().equals("POST") | theRequestDetails.getRequestType().equals("PUT")| theRequestDetails.getRequestType().equals("DELETE")) {
-                                		throw new AuthenticationException("A patient can not do POST, PUT or DELETE operation.");
                                 	}
                                     if (patientIds.size()>0) {
                                         if (theRequestDetails.getId() != null) {
